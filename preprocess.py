@@ -4,16 +4,15 @@ import cv2
 import multiprocessing
 import time
 
-DATA_ROOT_PATH = '/home/gon/Desktop/bb_segment_data'
-# DUMP_PATH = '/home/gon/Desktop/bb_extracted_frames'
-DUMP_PATH = '/home/gon/Desktop/0106_samp'
+DATA_ROOT_PATH = '/home/gon/Desktop/bb_segment_video'
+DUMP_PATH = '/home/gon/Desktop/bb_extracted_frames'
+
 
 RESIZE_RATIO = 0.311
 RESIZE_FRAME_SIZE = (224, 224)
 
 video_list = os.listdir(DATA_ROOT_PATH)
 
-start_time = time.time()
 
 def frame_extractor(vid):
         current_vid_path = os.path.join(DATA_ROOT_PATH, vid)
@@ -28,6 +27,7 @@ def frame_extractor(vid):
         cap = cv2.VideoCapture(current_vid_path)
 
         i = 0
+        k = 0
         while cap.isOpened():
             ret, frame = cap.read()
             # ret - 비디오를 불러오는데 성공했는가
@@ -44,7 +44,8 @@ def frame_extractor(vid):
             cropped_img = resized_frame[rh:rh+th, rw:rw+tw]
 
             if i % 8 == 0: # 8 Frame 마다 저장
-                cv2.imwrite(current_vid_dump_path + '/' + vid + '_' + str(i) + '.jpg', cropped_img)
+                cv2.imwrite(current_vid_dump_path + '/' + vid + '_' + str(k) + '.jpg', cropped_img)
+                k += 1
 
             i += 1
 
@@ -56,5 +57,9 @@ def frame_extractor(vid):
 pool = multiprocessing.Pool(processes=8)
 pool.map(frame_extractor, [i for i in video_list])
 
-end_time = int(time.time() - start_time)
-print("Total runtime : %.4f min" % (end_time/60))
+
+"""
+" 21-01-07
+매 8 frame 마다 sampling
+Total 106,932 / 2.6GB
+"""
