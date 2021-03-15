@@ -29,7 +29,7 @@ def frame_extractor(vid):
         if ret is False:
             break
 
-        if i % 15 is 0:
+        if i % 10 is 0:
             result.write(frame)
 
         i += 1
