@@ -4,13 +4,11 @@ import time
 
 import tensorflow as tf
 
-from keras.optimizers import SGD
-from keras.layers import Dense, GlobalAveragePooling2D
-
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, Masking
-
+from tensorflow.keras import layers
+from tensorflow.keras.layers import Layer
 from tensorflow.keras.utils import Sequence
+
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
 from keras.callbacks import ModelCheckpoint, EarlyStopping
@@ -51,7 +49,7 @@ class CNNDataLoader(Sequence):
     """
     Push Data into CNN for Feature Extraction
 
-    :return 4+D Tensor [B * N * H * W * C]
+    :return 4+D Tensor [B * N * H * W * C], label, masking_layer
     """
     def __init__(self, dataset, batch_size, max_length, image_size, shuffle=False):
         self.data_list = np.arange(len(dataset))
@@ -82,16 +80,20 @@ class CNNDataLoader(Sequence):
         # Initialize
         batch_input = np.empty([self.batch_size, self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]])
         batch_label = [None] * self.batch_size
+        batch_masking = [None] * self.batch_size
 
         # Data generation
         for i, frames in enumerate(temp_data_list):
             batch_input[i, ] = frames[0][0]
             batch_label[i] = frames[1]
+            batch_masking[i] = frames[3]
 
         batch_input = tf.convert_to_tensor(batch_input) # Convert ndarry to tensor
         batch_label = np.array(batch_label)
+        batch_masking = np.array(batch_masking)
+        batch_masking = tf.convert_to_tensor(batch_masking)
 
-        return batch_input, batch_label
+        return batch_input, batch_label, batch_masking
 
     def __len__(self):
         return int(np.floor(len(self.data_list) / self.batch_size)) # 4665 > 4640, drop 25
@@ -110,104 +112,59 @@ class CNNDataLoader(Sequence):
         temp_data_list = [self.dataset[k] for k in indexes]
 
         # Generate Data
-        x, y = self.__data__generation(temp_data_list)
-        x = tf.reshape(x, (self.batch_size * self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]))
+        x, y, masking = self.__data__generation(temp_data_list)
+        # x = tf.reshape(x, (self.batch_size * self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]))
 
-        return x, y
-
-
-def define_fe_model():
-    """
-    Define Feature Extraction Model
-
-    :return: model
-    """
-    # Include Top
-    # - True  = (Batch * F, 1000) // False = (Batch * F, 7, 7, 2048)
-    model = tf.keras.applications.ResNet50V2(weights='imagenet', include_top=True)
-    model.summary()
-
-    return model
+        # return x, y, masking
+        return x, y, masking
 
 
-def feature_extraction(dataloader):
-    """
-    Extract Features from Videos. Using Pre-trained Models
+class ReshapeLayer(Layer):
+    def __init__(self, input):
+        super(ReshapeLayer, self).__init__()
+        self.data_input = input
 
-    :param: dataloader
-    :return: features (Per video - Per frame features)
-    """
-    sp = time.time()
-    fe_sp = time.strftime('%c', time.localtime(time.time()))
+    def call(self, input):
+        input = input.reshape([BATCH_SIZE, MAX_FRAME_LENGTH, ])
+        # tf.reshape(input, [BATCH_SIZE, MAX_FRAME_LENGTH, ])
 
-    model = define_fe_model()
-    features = model.predict(dataloader, verbose=1)
-
-    ep = time.time() - sp
-    fe_ep = time.strftime('%c', time.localtime(time.time()))
-
-    print('Feature Extraction Started in : [', fe_sp, ']')
-    print('Feature Extraction Ended in   : [', fe_ep, ']')
-    print('Total Spent Time : %.2f min' % (ep/60))
-
-    # reshape [74240, 1000] > [Length of Dataloader, 16, 1000]
-    features = extracted_features.reshape([len(dataloader), MAX_FRAME_LENGTH, features.shape[1]])
-
-    return features
+        return input
 
 
-def create_masking(dataset):
-    """
-    일일히 비교하는건 시간이 너무 오래걸림.
-    padding 하는 과정에서 Masking Layer return하도록 변경
-
-
-    masking dummy frames for LSTM
-
-    :param dataset:
-    :return boolean tensor:
-    """
-    # Time Checker
-    sp = time.time()
-    fe_sp = time.strftime('%c', time.localtime(time.time()))
-
-    zero_tensor = tf.zeros([224, 224, 3])
-    masking_layer = np.empty([len(dataset), MAX_FRAME_LENGTH], dtype=bool)
-
-    for i in range(len(dataset)):
-        for j in range(MAX_FRAME_LENGTH):
-            current_frame = dataset[i][0][j]
-
-            compare_result = tf.math.equal(current_frame, zero_tensor)
-            compare_result = tf.reshape(compare_result, [224 * 224 * 3, ])
-            convert_result, _, _ = tf.unique_with_counts(compare_result)
-
-            if len(convert_result) is 1 and convert_result[0].numpy() == True:
-                masking_layer[i][j] = True
-            else:
-                masking_layer[i][j] = False
-
-    ep = time.time() - sp
-    fe_ep = time.strftime('%c', time.localtime(time.time()))
-
-    print('Layer Masking Started in : [', fe_sp, ']')
-    print('Layer Masking Ended in   : [', fe_ep, ']')
-    print('Total Spent Time : %.2f min' % (ep/60))
-
-    return tf.convert_to_tensor(masking_layer)
+def timer():
+    currnet_time_info = time.strftime('%c', time.localtime(time.time()))
+    return currnet_time_info
 
 
 # Data pre-processing
 train_dataset, test_dataset = CreateMLBYoutubeDataset(split_file, "training", root_path, MAX_FRAME_LENGTH), CreateMLBYoutubeDataset(split_file, "testing", root_path, MAX_FRAME_LENGTH)
 
-# Feature Extraction
+# Define Dataloader
 train_FE_dataloader, test_FE_dataloader = CNNDataLoader(train_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE), CNNDataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
-extracted_features = feature_extraction(train_FE_dataloader) # [74240, 1000] >> [145 * 32, 16, 1000] >> [4640, 16, 1000]
+
+# Define Functional API Model
+model_input = tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
+masking_input = tf.keras.Input(shape=(16,), name="frame_masking")
+
+x = tf.reshape(model_input, [-1, 224, 224, 3], name="5D_to_4D")
+feature_extraction_model = tf.keras.applications.ResNet50V2(weights="imagenet", include_top=True)
+x = feature_extraction_model(x)
+x = tf.reshape(x, [BATCH_SIZE, MAX_FRAME_LENGTH, 1000], name="Segment_feature")
+# output = layers.GlobalMaxPooling2D()(x)
+
+lstm = layers.LSTM(512)
+
+x = lstm(x)
+
+model = tf.keras.Model(model_input, x, name="feature_extraction")
+model.summary()
+
+predict_result = model.predict(test_FE_dataloader[0], verbose=1)
 
 """
-중간 정리
-    - extracted_features = [4640, 16, 1000]
+LSTM의 인자에 직접적으로 Masking 정보를 대입할 수 있음.
+mask = [Batch, Time-sequence]
+
+그럼 데이터로더를 통해서 마스크 정보를 따로 전달할 수 있는가?
+
 """
-
-
-# Custom training model
