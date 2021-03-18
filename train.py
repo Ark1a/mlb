@@ -4,7 +4,6 @@ import time
 
 import tensorflow as tf
 
-from tensorflow.keras.models import Sequential
 from tensorflow.keras import layers
 from tensorflow.keras.layers import Layer
 from tensorflow.keras.utils import Sequence
@@ -28,8 +27,6 @@ ROOT_PATH = '/home/gon/Desktop/sampled_video' # Sub-sampled Video Folder
 MODEL_CHECK_POINT = '/home/gon/Desktop/model_check'
 
 # Model Hyper-parameter
-split_file = SPLIT_FILE_PATH
-root_path = ROOT_PATH
 BATCH_SIZE = 32
 MAX_FRAME_LENGTH = 16
 IMG_SIZE = (224, 224, 3)
@@ -49,7 +46,7 @@ class CNNDataLoader(Sequence):
     """
     Push Data into CNN for Feature Extraction
 
-    :return 4+D Tensor [B * N * H * W * C], label, masking_layer
+    :return 5+D Tensor [B, N, H, W, C], label, masking_layer
     """
     def __init__(self, dataset, batch_size, max_length, image_size, shuffle=False):
         self.data_list = np.arange(len(dataset))
@@ -70,12 +67,8 @@ class CNNDataLoader(Sequence):
         """
         Generate data containing batch_size samples
 
-        + Creating 4+D Tensor
-         - Orignial Input : (N, H, W, C) + Batch
-         - 4+D : (Batch * N, H, W, C)
-
         :param temp_data_list:
-        :return Frames:
+        :return Frames [B, N, H, W, C]:
         """
         # Initialize
         batch_input = np.empty([self.batch_size, self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]])
@@ -84,7 +77,8 @@ class CNNDataLoader(Sequence):
 
         # Data generation
         for i, frames in enumerate(temp_data_list):
-            batch_input[i, ] = frames[0][0]
+            # frames[0] = frames, frames[1] = labels, frames[2] = vid, frames[3] = masking
+            batch_input[i, ] = frames[0]
             batch_label[i] = frames[1]
             batch_masking[i] = frames[3]
 
@@ -113,36 +107,26 @@ class CNNDataLoader(Sequence):
 
         # Generate Data
         x, y, masking = self.__data__generation(temp_data_list)
-        # x = tf.reshape(x, (self.batch_size * self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]))
 
-        # return x, y, masking
         return x, y, masking
 
 
-class ReshapeLayer(Layer):
-    def __init__(self, input):
-        super(ReshapeLayer, self).__init__()
-        self.data_input = input
-
-    def call(self, input):
-        input = input.reshape([BATCH_SIZE, MAX_FRAME_LENGTH, ])
-        # tf.reshape(input, [BATCH_SIZE, MAX_FRAME_LENGTH, ])
-
-        return input
-
-
 def timer():
-    currnet_time_info = time.strftime('%c', time.localtime(time.time()))
-    return currnet_time_info
+    current_time_info = time.strftime('%c', time.localtime(time.time()))
+    return current_time_info
 
 
 # Data pre-processing
-train_dataset, test_dataset = CreateMLBYoutubeDataset(split_file, "training", root_path, MAX_FRAME_LENGTH), CreateMLBYoutubeDataset(split_file, "testing", root_path, MAX_FRAME_LENGTH)
+train_dataset, test_dataset = CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "training", ROOT_PATH, MAX_FRAME_LENGTH), CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "testing", ROOT_PATH, MAX_FRAME_LENGTH)
 
 # Define Dataloader
 train_FE_dataloader, test_FE_dataloader = CNNDataLoader(train_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE), CNNDataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
 
+
+
+
 # Define Functional API Model
+# 수정필요!
 model_input = tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
 masking_input = tf.keras.Input(shape=(16,), name="frame_masking")
 
@@ -152,9 +136,18 @@ x = feature_extraction_model(x)
 x = tf.reshape(x, [BATCH_SIZE, MAX_FRAME_LENGTH, 1000], name="Segment_feature")
 # output = layers.GlobalMaxPooling2D()(x)
 
+# 여기에 추가로 임베딩을 만든다?
+# 임베딩을 한번에 다 박을수가 없으니까...Batch별로 embedding을 하는건가?
+
 lstm = layers.LSTM(512)
+"""
+Masking vector를 어떤식으로 입력으로 줄 것인지
+
+"""
 
 x = lstm(x)
+
+###
 
 model = tf.keras.Model(model_input, x, name="feature_extraction")
 model.summary()
@@ -163,8 +156,11 @@ predict_result = model.predict(test_FE_dataloader[0], verbose=1)
 
 """
 LSTM의 인자에 직접적으로 Masking 정보를 대입할 수 있음.
+masking 정보를 어떤식으로 줘야되지?
 mask = [Batch, Time-sequence]
 
 그럼 데이터로더를 통해서 마스크 정보를 따로 전달할 수 있는가?
+- 이건 되는거 같은데
+- masking 정보를 어떻게 하면 줄 수 있는지를 잘 모르겠네
 
 """
