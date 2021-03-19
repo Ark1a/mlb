@@ -123,31 +123,34 @@ train_dataset, test_dataset = CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "training
 train_FE_dataloader, test_FE_dataloader = CNNDataLoader(train_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE), CNNDataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
 
 
-
-
 # Define Functional API Model
-# 수정필요!
+# Define
 model_input = tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
-masking_input = tf.keras.Input(shape=(16,), name="frame_masking")
-
-x = tf.reshape(model_input, [-1, 224, 224, 3], name="5D_to_4D")
+masking = layers.Masking(mask_value=-1, input_shape=(16, 224, 224, 3))
 feature_extraction_model = tf.keras.applications.ResNet50V2(weights="imagenet", include_top=True)
+
+
+"""
+여기에 임베딩 / Masking Layer가 위치해야함.
+
+커스텀 마스킹을 이용하려고해도, LSTM에 어떤식으로 인자가 들어가는지를 잘 모르다보니 어떻게 해야될지 잘 모르겠는데..
+
+ - 레이어 Masking을 위해서는 Embedding이 필수적인가?
+ - 단순하게 For Loop문 이용해서 할 수 있는가?
+ - masking + LSTM만 만드는 것으로 가장 기본적인 모델은 완성이 되는건가?
+ - 독창성은 어떤식으로 만족할건지
+"""
+
+# Process
+x = tf.reshape(x, [-1, 224, 224, 3], name="5D_to_4D")
 x = feature_extraction_model(x)
 x = tf.reshape(x, [BATCH_SIZE, MAX_FRAME_LENGTH, 1000], name="Segment_feature")
-# output = layers.GlobalMaxPooling2D()(x)
+# masking_input = tf.keras.Input(shape=(16,), name="frame_masking")
 
-# 여기에 추가로 임베딩을 만든다?
-# 임베딩을 한번에 다 박을수가 없으니까...Batch별로 embedding을 하는건가?
 
-lstm = layers.LSTM(512)
-"""
-Masking vector를 어떤식으로 입력으로 줄 것인지
 
-"""
 
-x = lstm(x)
 
-###
 
 model = tf.keras.Model(model_input, x, name="feature_extraction")
 model.summary()
@@ -164,3 +167,13 @@ mask = [Batch, Time-sequence]
 - masking 정보를 어떻게 하면 줄 수 있는지를 잘 모르겠네
 
 """
+# 0 tensor를 모델의 입력으로 주면 어떤결과가 나오는지 한번 체크해봐야겠는데
+embedding = layers.Embedding(input_dim=BATCH_SIZE, output_dim=512)
+masking = layers.Masking(mask_value=0, input_shape=(16, 224, 224, 3))
+samp_zero_tensor = tf.zeros([16, 224, 224, 3])
+
+samp_masking_result = masking(samp_zero_tensor)
+
+unmasked_embedding = tf.cast(
+    tf.tile(tf.expand_dims(samp_zero_tensor, axis=-1), [32, 16, 224, 224, 3]), tf.float32
+)

@@ -48,7 +48,8 @@ def get_Frames(root_path, vid, max_length):
         ret, frame = cap.read()
         if ret is False:
             break
-        frame = frame[:, :, [0, 1, 2]]  # Channel - RGB
+        frame = frame[:, :, [0, 1, 2]] # Channel - RGB
+        frame = pixel_centering(frame) # Pixel Centering
         frames.append(frame)
 
     cap.release()
@@ -65,13 +66,12 @@ def get_Frames(root_path, vid, max_length):
         insufficient_frames = max_length - len(frames)
         padded_frames = np.zeros([insufficient_frames, h, w, c])
         frames = np.concatenate([frames, padded_frames])
-
         masking = np.concatenate([np.repeat(True, max_length - insufficient_frames), np.repeat(False, insufficient_frames)])
 
     return np.asarray(frames, dtype=np.float32), masking
 
 
-def image_transfomer(frames):
+def image_transformer(frames):
     """
     resize Original Image(1280*720) to Center Cropped Image(224*224)
 
@@ -105,13 +105,9 @@ class CreateMLBYoutubeDataset:
         vid, label, duration = self.data[index]
         max_length = self.max_length
         frames, mask = get_Frames(self.root_path, vid, max_length) # Convert Video2Frame
-        frames = image_transfomer(frames)
-        frames = pixel_centering(frames)
+        frames = image_transformer(frames)
 
-        return tf.convert_to_tensor(frames), label, vid, mask
+        return tf.convert_to_tensor(frames), label, vid, tf.convert_to_tensor(mask)
 
     def __len__(self):
         return len(self.data)
-
-
-
