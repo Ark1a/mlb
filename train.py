@@ -46,7 +46,7 @@ class CNNDataLoader(Sequence):
     """
     Push Data into CNN for Feature Extraction
 
-    :return 5+D Tensor [B, N, H, W, C], label, masking_layer
+    :return 5+D Tensor [B, N, H, W, C], label
     """
     def __init__(self, dataset, batch_size, max_length, image_size, shuffle=False):
         self.data_list = np.arange(len(dataset))
@@ -73,21 +73,17 @@ class CNNDataLoader(Sequence):
         # Initialize
         batch_input = np.empty([self.batch_size, self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]])
         batch_label = [None] * self.batch_size
-        batch_masking = [None] * self.batch_size
 
         # Data generation
         for i, frames in enumerate(temp_data_list):
-            # frames[0] = frames, frames[1] = labels, frames[2] = vid, frames[3] = masking
+            # frames[0] = frames, frames[1] = labels, frames[2] = vid
             batch_input[i, ] = frames[0]
             batch_label[i] = frames[1]
-            batch_masking[i] = frames[3]
 
         batch_input = tf.convert_to_tensor(batch_input) # Convert ndarry to tensor
         batch_label = np.array(batch_label)
-        batch_masking = np.array(batch_masking)
-        batch_masking = tf.convert_to_tensor(batch_masking)
 
-        return batch_input, batch_label, batch_masking
+        return batch_input, batch_label
 
     def __len__(self):
         return int(np.floor(len(self.data_list) / self.batch_size)) # 4665 > 4640, drop 25
@@ -106,9 +102,15 @@ class CNNDataLoader(Sequence):
         temp_data_list = [self.dataset[k] for k in indexes]
 
         # Generate Data
-        x, y, masking = self.__data__generation(temp_data_list)
+        x, y = self.__data__generation(temp_data_list)
 
-        return x, y, masking
+        return x, y
+
+
+def loss(model, x, y , training):
+    y_= model(x, training=training)
+
+    return loss_object(y_tue)
 
 
 def timer():
@@ -123,57 +125,34 @@ train_dataset, test_dataset = CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "training
 train_FE_dataloader, test_FE_dataloader = CNNDataLoader(train_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE), CNNDataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
 
 
-# Define Functional API Model
-# Define
-model_input = tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
-masking = layers.Masking(mask_value=-1, input_shape=(16, 224, 224, 3))
-feature_extraction_model = tf.keras.applications.ResNet50V2(weights="imagenet", include_top=True)
-
-
-"""
-여기에 임베딩 / Masking Layer가 위치해야함.
-
-커스텀 마스킹을 이용하려고해도, LSTM에 어떤식으로 인자가 들어가는지를 잘 모르다보니 어떻게 해야될지 잘 모르겠는데..
-
- - 레이어 Masking을 위해서는 Embedding이 필수적인가?
- - 단순하게 For Loop문 이용해서 할 수 있는가?
- - masking + LSTM만 만드는 것으로 가장 기본적인 모델은 완성이 되는건가?
- - 독창성은 어떤식으로 만족할건지
-"""
+# Define Model layers With Functional API
+model_input= tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
+masking_layer = layers.Masking()
+feature_extraction_layer = tf.keras.applications.ResNet50V2(weights="imagenet", include_top=True)
+lstm_layer = layers.LSTM(512)
+dense_layer_1 = layers.Dense(256, activation='relu')
+dense_layer_2 = layers.Dense(8, activation='softmax')
 
 # Process
-x = tf.reshape(x, [-1, 224, 224, 3], name="5D_to_4D")
-x = feature_extraction_model(x)
+x = masking_layer(model_input)
+x = tf.reshape(x, [-1, 224, 224, 3], name="5D_to_4D_Tensor")
+x = feature_extraction_layer(x)
 x = tf.reshape(x, [BATCH_SIZE, MAX_FRAME_LENGTH, 1000], name="Segment_feature")
-# masking_input = tf.keras.Input(shape=(16,), name="frame_masking")
+x = lstm_layer(x)
+x = dense_layer_1(x)
+x = dense_layer_2(x)
 
-
-
-
-
-
-model = tf.keras.Model(model_input, x, name="feature_extraction")
+# Model Complile
+model = tf.keras.Model(model_input, x, name="Activity Recognition Model")
 model.summary()
 
-predict_result = model.predict(test_FE_dataloader[0], verbose=1)
 
 """
-LSTM의 인자에 직접적으로 Masking 정보를 대입할 수 있음.
-masking 정보를 어떤식으로 줘야되지?
-mask = [Batch, Time-sequence]
-
-그럼 데이터로더를 통해서 마스크 정보를 따로 전달할 수 있는가?
-- 이건 되는거 같은데
-- masking 정보를 어떻게 하면 줄 수 있는지를 잘 모르겠네
-
+Loss Function 추가해야댐
+Loss Function의 추가는 따로 함수 정의해서 진행할 것
 """
-# 0 tensor를 모델의 입력으로 주면 어떤결과가 나오는지 한번 체크해봐야겠는데
-embedding = layers.Embedding(input_dim=BATCH_SIZE, output_dim=512)
-masking = layers.Masking(mask_value=0, input_shape=(16, 224, 224, 3))
-samp_zero_tensor = tf.zeros([16, 224, 224, 3])
+# Model Loss
+loss_obj = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
 
-samp_masking_result = masking(samp_zero_tensor)
 
-unmasked_embedding = tf.cast(
-    tf.tile(tf.expand_dims(samp_zero_tensor, axis=-1), [32, 16, 224, 224, 3]), tf.float32
-)
+

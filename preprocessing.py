@@ -44,12 +44,11 @@ def get_Frames(root_path, vid, max_length):
     cap = cv2.VideoCapture(current_vid_path)
 
     while cap.isOpened():
-        masking = np.empty(0)
         ret, frame = cap.read()
         if ret is False:
             break
         frame = frame[:, :, [0, 1, 2]] # Channel - RGB
-        frame = pixel_centering(frame) # Pixel Centering
+        frame = pixel_centering(frame) # Pixe
         frames.append(frame)
 
     cap.release()
@@ -60,15 +59,13 @@ def get_Frames(root_path, vid, max_length):
     # Setting Maximum number of using Frames + Padding
     if len(frames) >= max_length:
         frames = frames[:max_length]
-        masking = np.repeat(True, max_length)
 
     elif len(frames) < max_length:
         insufficient_frames = max_length - len(frames)
         padded_frames = np.zeros([insufficient_frames, h, w, c])
         frames = np.concatenate([frames, padded_frames])
-        masking = np.concatenate([np.repeat(True, max_length - insufficient_frames), np.repeat(False, insufficient_frames)])
 
-    return np.asarray(frames, dtype=np.float32), masking
+    return np.asarray(frames, dtype=np.float32)
 
 
 def image_transformer(frames):
@@ -104,10 +101,10 @@ class CreateMLBYoutubeDataset:
     def __getitem__(self, index):
         vid, label, duration = self.data[index]
         max_length = self.max_length
-        frames, mask = get_Frames(self.root_path, vid, max_length) # Convert Video2Frame
+        frames = get_Frames(self.root_path, vid, max_length) # Convert Video2Frame
         frames = image_transformer(frames)
 
-        return tf.convert_to_tensor(frames), label, vid, tf.convert_to_tensor(mask)
+        return tf.convert_to_tensor(frames), label, vid
 
     def __len__(self):
         return len(self.data)
