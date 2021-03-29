@@ -5,7 +5,6 @@ import time
 import tensorflow as tf
 
 from tensorflow.keras import layers
-from tensorflow.keras.layers import Layer
 from tensorflow.keras.utils import Sequence
 
 from tensorflow.compat.v1 import ConfigProto
@@ -27,9 +26,12 @@ ROOT_PATH = '/home/gon/Desktop/sampled_video' # Sub-sampled Video Folder
 MODEL_CHECK_POINT = '/home/gon/Desktop/model_check'
 
 # Model Hyper-parameter
-BATCH_SIZE = 32
+BATCH_SIZE = 6
+EPOCHS = 5
 MAX_FRAME_LENGTH = 16
+LSTM_DIM = 512
 IMG_SIZE = (224, 224, 3)
+MOBILENET_TRAINABLE = False
 
 # Model ChdeckPoints
 checkpointer = ModelCheckpoint(
@@ -42,7 +44,7 @@ checkpointer = ModelCheckpoint(
 early_stopper = EarlyStopping(patience=10)
 
 
-class CNNDataLoader(Sequence):
+class DataLoader(Sequence):
     """
     Push Data into CNN for Feature Extraction
 
@@ -68,7 +70,7 @@ class CNNDataLoader(Sequence):
         Generate data containing batch_size samples
 
         :param temp_data_list:
-        :return Frames [B, N, H, W, C]:
+        :return Frames [B, N, H, W, C], labels(one hot):
         """
         # Initialize
         batch_input = np.empty([self.batch_size, self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]])
@@ -80,8 +82,8 @@ class CNNDataLoader(Sequence):
             batch_input[i, ] = frames[0]
             batch_label[i] = frames[1]
 
-        batch_input = tf.convert_to_tensor(batch_input) # Convert ndarry to tensor
-        batch_label = np.array(batch_label)
+        batch_input = tf.convert_to_tensor(batch_input, dtype=tf.float32) # Convert ndarry to tensor
+        batch_label = tf.convert_to_tensor(batch_label)
 
         return batch_input, batch_label
 
@@ -107,10 +109,60 @@ class CNNDataLoader(Sequence):
         return x, y
 
 
-def loss(model, x, y , training):
-    y_= model(x, training=training)
+def loss(model, x, y, training):
+    y_ = model(x, training=training)
+    loss_ = loss_object(y_true=y, y_pred=y_)
 
-    return loss_object(y_tue)
+    # Masking
+    # mask = tf.math.logical_not(tf.math.equal(x, 0))
+    # loss_ *= mask
+
+    # return tf.reduce_mean(loss_)
+    return loss_object(y_true=y, y_pred=y_)
+
+
+def grad(model, x, y):
+    with tf.GradientTape() as tape:
+        loss_value = loss(model, x, y, training=True)
+
+    return loss_value, tape.gradient(loss_value, model.trainable_variables)
+
+
+def train(model, dataloader, optimizer, num_epochs=EPOCHS):
+    start_time = time.time()
+    print("\nModel training Started in : [%s]" % timer())
+
+    train_loss_results = []
+    train_accuracy_results = []
+    training_total_time = []
+
+    for epoch in range(num_epochs):
+        print('\n\n Epoch {} / {}'.format(epoch, num_epochs - 1))
+        print('-' * 20)
+
+        epoch_loss_avg = tf.keras.metrics.Mean()
+        epoch_accuracy = tf.keras.metrics.CategoricalAccuracy()
+
+        for x, y in dataloader:
+            loss_value, grads = grad(model, x, y)
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+            # Track Progress
+            epoch_loss_avg.update_state(loss_value)
+            epoch_accuracy.update_state(y, model(x, training=True))
+
+            print("Current loss : {}".format(loss_value))
+
+        end_time = time.time() - start_time
+        print("\nModel training ended in : [%s]" % timer())
+
+        train_loss_results.append(epoch_loss_avg.result())
+        train_accuracy_results.append(epoch_accuracy.result())
+        training_total_time.append(end_time)
+
+    training_total_time = np.sum(training_total_time)
+
+    return train_loss_results, train_accuracy_results, training_total_time
 
 
 def timer():
@@ -119,17 +171,23 @@ def timer():
 
 
 # Data pre-processing
-train_dataset, test_dataset = CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "training", ROOT_PATH, MAX_FRAME_LENGTH), CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "testing", ROOT_PATH, MAX_FRAME_LENGTH)
+train_dataset = CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "training", ROOT_PATH, MAX_FRAME_LENGTH)
+test_dataset = CreateMLBYoutubeDataset(SPLIT_FILE_PATH, "testing", ROOT_PATH, MAX_FRAME_LENGTH)
 
 # Define Dataloader
-train_FE_dataloader, test_FE_dataloader = CNNDataLoader(train_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE), CNNDataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
+train_dataloader = DataLoader(train_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
+test_dataloader = DataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZE)
 
+# Phase
+datasets = {'train': train_dataset, 'test': test_dataset}
+dataloaders = {'train': train_dataloader, 'test': test_dataloader}
 
 # Define Model layers With Functional API
-model_input= tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
+model_input = tf.keras.Input(shape=(16, 224, 224, 3), name="video_frame")
 masking_layer = layers.Masking()
-feature_extraction_layer = tf.keras.applications.ResNet50V2(weights="imagenet", include_top=True)
-lstm_layer = layers.LSTM(512)
+feature_extraction_layer = tf.keras.applications.MobileNetV2(weights='imagenet', include_top=True)
+feature_extraction_layer.trainbable = MOBILENET_TRAINABLE # Freeze weight
+lstm_layer = layers.LSTM(LSTM_DIM)
 dense_layer_1 = layers.Dense(256, activation='relu')
 dense_layer_2 = layers.Dense(8, activation='softmax')
 
@@ -143,16 +201,41 @@ x = dense_layer_1(x)
 x = dense_layer_2(x)
 
 # Model Complile
-model = tf.keras.Model(model_input, x, name="Activity Recognition Model")
+model = tf.keras.Model(model_input, x)
 model.summary()
 
-
-"""
-Loss Function 추가해야댐
-Loss Function의 추가는 따로 함수 정의해서 진행할 것
-"""
-# Model Loss
-loss_obj = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+# Model parameter
+loss_object = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
 
 
+# model training with iteration
+train_loss, train_acc, training_time = train(model, train_dataloader, optimizer)
+print("train_loss : {}, train_acc : {}, train_time : {}".format(train_loss, train_acc, training_time))
 
+def sample_loss_calc():
+    # just for back up
+
+    # Sample Loss function
+    l = loss(model, train_dataloader[0], training=False)
+    print("Loss test : {}".format(l))
+
+    x, y = train_dataloader[0]
+    y_ = model(x, training=False)
+    loss_ = loss_object(y_true=y, y_pred=y_)
+
+    # Masking
+    mask = tf.math.logical_not(tf.math.equal(x, 0))
+    loss_ += mask
+
+
+
+
+    # loss, grad
+    loss_value, grads = grad(model, train_dataloader[0])
+    print("\nStep : {}, Initial Loss : {}".format(optimizer.iterations.numpy(),
+                                                  loss_value.numpy()))
+
+    optimizer.apply_gradients(zip(grads, model.trainable_variables))
+    print("\nStep : {},    Loss : {}".format(optimizer.iterations.numpy(),
+                                             loss(model, train_dataloader[0], training=True).numpy()))
