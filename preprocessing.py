@@ -23,7 +23,7 @@ def vid_label(root_path, json_file, mode, num_class=8):
             continue
 
         # Data_labeling
-        multi_label = np.zeros((num_class,))
+        multi_label = np.zeros((num_class,), dtype='int')
         duration = data[vid]['end'] - data[vid]['start']
 
         label = data[vid]['labels']
@@ -43,10 +43,13 @@ def get_Frames(root_path, vid, max_length):
     current_vid_path = current_vid_path + ".mp4"
     cap = cv2.VideoCapture(current_vid_path)
 
-    while cap.isOpened():
+    while True():
+        masking = np.empty(0)
         ret, frame = cap.read()
+
         if ret is False:
             break
+
         frame = frame[:, :, [0, 1, 2]] # Channel - RGB
         frame = pixel_centering(frame) # Pixe
         frames.append(frame)
@@ -59,29 +62,19 @@ def get_Frames(root_path, vid, max_length):
     # Setting Maximum number of using Frames + Padding
     if len(frames) >= max_length:
         frames = frames[:max_length]
+        masking = np.repeat(True, max_length)
 
     elif len(frames) < max_length:
         insufficient_frames = max_length - len(frames)
         padded_frames = np.zeros([insufficient_frames, h, w, c])
+
+        true_masking = np.repeat(True, len(frames))
+        false_masking = np.repeat(False, insufficient_frames)
+
         frames = np.concatenate([frames, padded_frames])
+        masking = np.concatenate([true_masking, false_masking])
 
-    return np.asarray(frames, dtype=np.float32)
-
-
-def image_transformer(frames):
-    """
-    resize Original Image(1280*720) to Center Cropped Image(224*224)
-
-    :param frames:
-    :return Center cropped image:
-    """
-    t, h, w, c = frames.shape
-    th, tw = 224, 224
-
-    i = int(np.round((h - th) / 2.))
-    j = int(np.round((w - tw) / 2.))
-
-    return frames[:, i:i+th, j:j+tw, :]
+    return np.asarray(frames, dtype=np.float32), masking
 
 
 def pixel_centering(pic):
@@ -93,6 +86,7 @@ def pixel_centering(pic):
 
 class CreateMLBYoutubeDataset:
     def __init__(self, split_file, mode, root_path, max_length):
+        super(CreateMLBYoutubeDataset, self).__init__()
         self.data = vid_label(root_path, split_file, mode)
         self.split_file = split_file
         self.root_path = root_path
@@ -100,11 +94,10 @@ class CreateMLBYoutubeDataset:
 
     def __getitem__(self, index):
         vid, label, duration = self.data[index]
-        max_length = self.max_length
-        frames = get_Frames(self.root_path, vid, max_length) # Convert Video2Frame
-        frames = image_transformer(frames)
+        frames, masking = get_Frames(self.root_path, vid, self.max_length) # Convert Video2Frame
 
-        return tf.convert_to_tensor(frames), label, vid
+        return tf.convert_to_tensor(frames, dtype=tf.float32), label, masking, vid
 
     def __len__(self):
         return len(self.data)
+
