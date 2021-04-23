@@ -225,50 +225,9 @@ class Attention(tf.keras.layers.Layer):
         self.units = units
         self.attention_dim = attention_dim
 
-        """
-        희찬선배 Feedback - Attention 계산 과정은 Dense로 구성
-        
-        score = Softmax( w * tahn(wx + wy + c) )
-        A = Dense(n, bias=False) # Wx
-        B = Dense(n, bias=True)
-        C = Dense(1, bias=False)
-        
-        세개다 모두 Activation은 False로 지정
-        
-        Attention의 Input이 Vector만 들어가는게 아니다?
-        
-        
-        Q1. Dense - Conv2d / 아니면 아에 임베딩을 추가하던지
-    
-        Embedding 추가한다고 하면 Embedding Dims의 설정은 어떤식으로 해야되나?
-        전제 영상이 5846 Embedding Dims = 5846 + 1?
-        
-        영상의 개수대로 임베딩을 해야되는건지
-        아니면 클래스의 개수대로 임베딩을 해야되는건지
-        
-        만약 임베딩을 한다고하면, 데이터 전처리부도 수정해야 되는게 아닌가?
-        Padding을 좀 무식하게 하고 있는대
-        그냥 다 수정을한다?
-        
-        
-        실제로 전처리부 수수정했을때 시간 감소를 보였는데
-        Padding Part를 np.zeros로 만드는 것 보다 tf_padding으로 처리하면 더 좋긴 할텐데
-        
-        
-        아니면 특정 레이어를 추가해서 정보를 더 뽑는게 좋다?
-        난 영상 길이가 짧으니, 2 프레임으로 sampling하고 실험 진행?
-        
-        2 fps - 20 frames 쓴다고 하면..
-
-        """
-
-
-        self.attention_1 = layers.Conv2D(self.attention_dim, 1, activation='tahn', use_bias=False) # Feature Map Attention (7 * 7 * 2048)
-        self.attention_2 = layers.Conv2D(self.attention_dim, 1, activation='tahn', use_bias=False) # High-level Vector Attention
-
-        self.attention_1_weight = layers.Conv2D(7*7, 1, activation=None, use_bias=False) # to_get calc Weight Vector
-        self.attention_2_weight = layers.Conv2D(1, 1, activaiton=None, use_bias=False)
-
+       """
+	Working on...
+       """
 
 def train(dataloader, num_epochs=EPOCHS):
     ar_model = ActivityRecognition(dataloader)
