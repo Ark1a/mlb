@@ -6,7 +6,6 @@ import sys
 import datetime
 import json
 
-
 import tensorflow as tf
 
 from tensorflow.keras import layers, Model
@@ -41,7 +40,6 @@ def setting_seed(seed:int=42):
 
 setting_seed()
 
-
 # Data path
 SPLIT_FILE_PATH = '/home/gon/Desktop/mlb-youtube-master/data/mlb-youtube-segmented_modi.json'
 NEGATIVE_SPLIT_FILE_PATH = '/home/gon/Desktop/mlb-youtube-master/data/mlb-youtube-negative_modi_split_preprocess.json'
@@ -65,15 +63,13 @@ per_test_ckpt_file = per_test_ckpt + '/' + file_name
 
 # Model Hyper-parameter
 BATCH_SIZE = 2
-EPOCHS = 5
+EPOCHS = 9
 MAX_FRAME_LENGTH = 16
 LSTM_DIM = 512
 IMG_SIZE = (224, 224, 3)
 TRAINABLE = False
 LEARNING_RATE = 0.0001 # Default=0.0001
-
-# Model EarlyStopper
-early_stopper = EarlyStopping(patience=10)
+SIGMOID_THRESHOLD = 0.5
 
 # Timer
 star_time = int(time.time())
@@ -99,12 +95,16 @@ checkpointer = ModelCheckpoint(
     save_best_only=True
 )
 
+# Model EarlyStopper
+early_stopper = EarlyStopping(patience=10)
+
 
 class DataLoader(Sequence):
     """
-    Push Data into CNN for Feature Extraction
+    Feed Data into CNN for Feature Extraction
+    Label list = {'ball': 0, 'swing': 1, 'strike': 2, 'hit': 3, 'foul': 4, 'in play': 5, 'bunt': 6, 'hit by pitch': 7} # labels to Index
 
-    :return 5+D Tensor [B, N, H, W, C], label
+    :return 5+D Tensor [B, N, H, W, C], label, masking, vid
     """
     def __init__(self, dataset, batch_size, max_length, image_size, shuffle=False):
         super(DataLoader, self).__init__()
@@ -129,7 +129,6 @@ class DataLoader(Sequence):
         :param temp_data_list:
         :return Frames [B, N, H, W, C], labels(one hot):
         """
-        # Initialize
         batch_input = np.empty([self.batch_size, self.max_length, self.img_size[0], self.img_size[1], self.img_size[2]])
         batch_label = [None] * self.batch_size
         batch_mask = [None] * self.batch_size
@@ -144,7 +143,7 @@ class DataLoader(Sequence):
             batch_vid[i] = frames[3]
 
         batch_input = tf.convert_to_tensor(batch_input, dtype=tf.float32) # Convert ndarry to tensor
-        batch_label = np.array(batch_label)
+        batch_label = np.array(batch_label).astype('float32')
         batch_mask = np.array(batch_mask)
         batch_vid = np.array(batch_vid)
 
@@ -187,9 +186,9 @@ class ActivityRecognition(Model):
 
         self.dense1 = layers.Dense(512, activation='relu', dtype='float32')
         self.dense2 = layers.Dense(256, activation='relu', dtype='float32')
-        self.dense3 = layers.Dense(8, activation='softmax')
+        self.dense3 = layers.Dense(8, activation=None)
 
-    def call(self, x, cnn_training=None):
+    def call(self, x, cnn_training=None, training=None):
         input, label, mask, vid = x
         self.cnn.trainable = cnn_training
 
@@ -214,24 +213,13 @@ class ActivityRecognition(Model):
         # Activity Classification Part
         result = self.dense1(f_last_state)
         result = self.dense2(result)
-        result = self.dense3(result)
+        logits = self.dense3(result)
 
-        return result
+        return logits
 
-
-class Attention(tf.keras.layers.Layer):
-    def __init__(self, units, attention_dim):
-        super(Attention, self).__init__()
-        self.units = units
-        self.attention_dim = attention_dim
-
-       """
-	Working on...
-       """
 
 def train(dataloader, num_epochs=EPOCHS):
     ar_model = ActivityRecognition(dataloader)
-    loss_object = tf.keras.losses.CategoricalCrossentropy(from_logits=True, reduction=tf.keras.losses.Reduction.NONE)
     optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 
     tr_s_timer = time_to_string() # Timer
@@ -255,51 +243,51 @@ def train(dataloader, num_epochs=EPOCHS):
             _, label, _, _ = x
 
             with tf.GradientTape() as tape:
-                pred = ar_model(x, False)
-                loss_value = loss_object(y_true=label, y_pred=pred)
+                pred = ar_model(x, False, True)
+                loss_value = tf.nn.sigmoid_cross_entropy_with_logits(labels=label, logits=pred)
 
-                # 21-04-23/todo : Multi-binear Classifier
-                """
-                모델파트 또는 여기서 이진 분류기의 구성이 필요
-                """
+                pred_value = tf.nn.sigmoid(pred)
+                pred_value = tf.math.greater(pred_value, SIGMOID_THRESHOLD)
+                pred_value = tf.cast(pred_value, dtype=tf.float32)
+                preds.append(pred_value)
+                labels.append(label)
+
                 variable = ar_model.trainable_variables
                 gradients = tape.gradient(loss_value, variable)
 
                 optimizer.apply_gradients(zip(gradients, variable))
 
                 epoch_loss_avg(loss_value)
-                epoch_accuracy(label, pred)
+                epoch_accuracy(label, pred_value)
 
-            print("{0:0d} - {1:04d} / {2:0d}. Current Loss : {3:0.6f} Current Acc : {4:0.6f}".format(epoch, i, len(dataloader) * 2,
-                                                                                                     epoch_loss_avg.result().numpy(), epoch_accuracy.result().numpy()))
+            print("{0:0d} - {1: 4d} / {2:0d}. Current Loss : [{3:0.6f}] Current Acc : [{4:0.6f}]".format(epoch+1, i, len(dataloader) * 2,
+                                                                                                         epoch_loss_avg.result().numpy(), epoch_accuracy.result().numpy()))
             i += BATCH_SIZE
 
     end_time = int(time.time() - star_time) / 3600
     tr_e_timer = time_to_string()
 
     print("\nModel training Started in : [%s]" % tr_s_timer)
-    print("Model training ended in   : [%s]" % tr_e_timer)
+    print("Model training ended in   : [%s]\n" % tr_e_timer)
 
     # training_result
     train_loss_result, train_accuracy_result = epoch_loss_avg.result().numpy(), epoch_accuracy.result().numpy()
 
     # calc mean average Precision
-    # preds = np.array(preds).reshape(-1, 2)
-    # labels = np.array(labels).reshape(-1, 2)
+    preds = np.array(preds).reshape(-1, 8)
+    labels = np.array(labels).reshape(-1, 8)
 
-    # mean_AP, per_class_precision = meanAveragePrecision(preds, labels)
+    mean_AP, per_class_precision = meanAveragePrecision(preds, labels)
 
     # Model Weight Saving
     ar_model.save_weights('%s' % per_test_ckpt_file)
 
-    return train_loss_result, train_accuracy_result, end_time #, mean_AP, per_class_precision
+    return train_loss_result, train_accuracy_result, end_time, mean_AP, per_class_precision
 
 
-def validation(dataloader):
+def validation(dataloader, type):
     val_ar_model = ActivityRecognition(dataloader)
     val_ar_model.load_weights(per_test_ckpt_file)
-
-    loss_object = tf.keras.losses.CategoricalCrossentropy(from_logits=True, reduction=tf.keras.losses.Reduction.NONE)
 
     val_str_time = time.time()
     val_s_timer = time_to_string()  # Timer
@@ -314,34 +302,35 @@ def validation(dataloader):
     for x in dataloader:
         _, label, _, _ = x
 
-        pred = val_ar_model(x, False)
-        loss_value = loss_object(y_true=label, y_pred=pred)
+        pred = val_ar_model(x, False, True)
+        loss_value = tf.nn.sigmoid_cross_entropy_with_logits(labels=label, logits=pred)
 
-        # todo : Multi-binear Classifier pt2
-        # temp_pred = tf.argmax(pred)
-        # val_preds.append(temp_pred)
-        # val_labels.append(label)
+        pred_value = tf.nn.sigmoid(pred)
+        pred_value = tf.math.greater(pred_value, SIGMOID_THRESHOLD)
+        pred_value = tf.cast(pred_value, dtype=tf.float32)
+        val_preds.append(pred_value)
+        val_labels.append(label)
 
         val_loss(loss_value)
-        val_acc(label, pred)
+        val_acc(label, pred_value)
 
-        print("{0:04d} / {1:0d}. Current Loss : {2:0.6f} Current Acc : {3:0.6f}".format(i, len(dataloader) * 2,
-                                                                                        val_loss.result().numpy(), val_acc.result().numpy()))
+        print("{0:s} - {1: 4d} / {2:0d}. Current Loss : [{3:0.6f}] Current Acc : [{4:0.6f}]".format(type, i, len(dataloader) * 2,
+                                                                                                  val_loss.result().numpy(), val_acc.result().numpy()))
         i += BATCH_SIZE
 
     val_end_time = int(time.time() - val_str_time) / 3600
     val_e_timer = time_to_string()
 
     print("\nModel validation Started in : [%s]" % val_s_timer)
-    print("Model validation ended in   : [%s]" % val_e_timer)
+    print("Model validation ended in   : [%s]\n" % val_e_timer)
 
-    val_preds = np.array(val_preds).reshape(-1, 2)
-    val_labels = np.array(val_labels).reshape(-1, 2)
+    val_preds = np.array(val_preds).reshape(-1, 8)
+    val_labels = np.array(val_labels).reshape(-1, 8)
 
     val_loss, val_acc = val_loss.result().numpy(), val_acc.result().numpy()
-    # mean_ap, per_class_precision = meanAveragePrecision(val_preds, val_labels)
+    mean_ap, per_class_precision = meanAveragePrecision(val_preds, val_labels)
 
-    return val_loss, val_acc, val_end_time #, mean_ap, per_class_precision
+    return val_loss, val_acc, val_end_time, mean_ap, per_class_precision
 
 
 def meanAveragePrecision(preds, labels):
@@ -389,9 +378,9 @@ test_dataloader = DataLoader(test_dataset, BATCH_SIZE, MAX_FRAME_LENGTH, IMG_SIZ
 # test
 train_loss, train_acc, train_time, mean_ap, per_class_precision = train(train_dataloader)
 test_loss, test_acc, test_time, test_mean_ap, test_per_class_precision = validation(test_dataloader)
-print("\n\ntrain_loss : {0:0.6f}, train_acc : {1:0.6f}, Mean_AP : {2:0.6f}, train_time : {3:0.3f} H".format(train_loss, train_acc, mean_ap, train_time))
-print("\n\nval_loss : {0:0.6f}, val_acc : {1:0.6f}, test_mean_ap : {2:0.6f}, test_time : {3:0.3f} H".format(test_loss, test_acc, test_mean_ap, test_time))
-
+print("-"*100)
+print("train_loss : {0:0.6f}, train_acc : {1:0.6f},      mean_AP : {2:0.6f}, train_time : {3:0.3f} H".format(train_loss, train_acc, mean_ap, train_time))
+print("  val_loss : {0:0.6f},   val_acc : {1:0.6f},  val_mean_ap : {2:0.6f},   val_time : {3:0.3f} H".format(test_loss, test_acc, test_mean_ap, test_time))
 
 # Save result to json
 train_loss, train_acc, mean_ap, train_time, per_class_precision = float(train_loss), float(train_acc), float(mean_ap), float(train_time), list(per_class_precision)
@@ -399,7 +388,7 @@ test_loss, test_acc, test_mean_ap, test_time, test_per_class_precision = float(t
 
 dump_data = {}
 
-dump_data['train'] = {"train_loss":train_loss, "train_acc":train_acc, "train_mAP":mean_ap, "train_time":train_time, "per_class_precisions":per_class_precision}
-dump_data['test'] = {"test_loss":test_loss, "test_acc":test_acc, "test_mAP":test_mean_ap, "test_time":test_time, "test_per_class_precisions":test_per_class_precision}
+dump_data['train'] = {"train_loss": train_loss, "train_acc": train_acc, "train_mAP": mean_ap, "train_time": train_time, "per_class_precisions": per_class_precision}
+dump_data['test'] = {"test_loss": test_loss, "test_acc": test_acc, "test_mAP": test_mean_ap, "test_time": test_time, "test_per_class_precisions": test_per_class_precision}
 
 json.dump(dump_data, open('/%s/%s_result.json' % (per_test_saving, data_saving), 'w'))
